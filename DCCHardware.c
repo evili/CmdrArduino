@@ -2,6 +2,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include "DCCHardware.h"
+#include "DCCCutout.h"
 
 /// An enumerated type for keeping track of the state machine used in the timer1 ISR
 /** Given the structure of a DCC packet, the ISR can be in one of 5 states.
@@ -17,7 +18,9 @@ typedef enum  {
   dos_send_preamble,
   dos_send_bstart,
   dos_send_uint8_t,
-  dos_end_bit
+  dos_end_bit,
+  dos_cutout_start,
+  dos_cutout_end,
 } DCC_output_state_t;
 
 DCC_output_state_t DCC_state = dos_idle; //just to start out
@@ -190,9 +193,33 @@ ISR(TIMER1_COMPA_vect)
       /// Done with the packet. Send out a final '1', then head back to dos_idle to check for a new packet.
       case dos_end_bit:
         OCR1A = OCR1B = one_count;
-        DCC_state = dos_idle;
+        DCC_state = dos_cutout;
         current_bit_counter = 14; //in preparation for a premable...
 //        Serial.println(" 1");
+        break;
+        // Railcom cutout after each packet
+        // t.b.d.
+    case dos_cutout_start:
+        // Clear OC1A/OC1B
+        TCCR1A = (1<<COM1A1) | (0<<COM1A0) | (1<<COM1B1) | (0<<COM1B0) | (0<<WGM11) | (0<<WGM10);
+        // Force compare to 0 (the real cutout)
+        TCCR1C |= (1<<FOC1B) | (1<<FOC1A);
+        OCR1A = OCR1B = CUTOUT_TIME;
+        // Enable external interrupt
+        // and let railcom_read do the job...
+        railcom_start();
+        // see you at the end...
+        DCC_state = dos_cutout_end;
+        break;
+
+    case dos_cutout_end:
+        // Toggle OC1A/OC1B
+        TCCR1A = (0<<COM1A1) | (1<<COM1A0) | (0<<COM1B1) | (1<<COM1B0) | (0<<WGM11) | (0<<WGM10);
+        // Back to OC1B complement OC1A
+        TCCR1C |= (1<<FOC1B);
+        // Prepare for 1's
+        OCR1A = OCR1B = one_count;
+        DCC_state = dos_idle;
         break;
     }
   }
